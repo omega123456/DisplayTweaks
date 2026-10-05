@@ -1,0 +1,12 @@
+  DisplayTweaks Dev <version> (debug) (disabled)
+---
+  HiDPI Unavailable (disabled)
+  This version of macOS doesn’t support it. (disabled)
+---
+  Turn Off HiDPI on All Displays (disabled)
+---
+  Launch at Login
+✓ Automatic Updates
+  Check for Updates…
+---
+  Quit DisplayTweaks

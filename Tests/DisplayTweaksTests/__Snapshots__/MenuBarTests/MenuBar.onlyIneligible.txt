@@ -1,0 +1,12 @@
+  DisplayTweaks Dev <version> (debug) (disabled)
+---
+  iPad — HiDPI (disabled)
+      HiDPI not available (disabled)
+---
+  Turn Off HiDPI on All Displays (disabled)
+---
+  Launch at Login
+✓ Automatic Updates
+  Check for Updates…
+---
+  Quit DisplayTweaks

@@ -1,0 +1,16 @@
+  DisplayTweaks Dev <version> (debug) (disabled)
+---
+✓ DELL S2725DSM (Main) — HiDPI
+      Looks like 2560 × 1440 (5120 × 2880 backing) · 144 Hz (disabled)
+  DELL S2725DC — HiDPI
+      Failed — no HiDPI mode at 100 Hz. Choose HiDPI to retry. (disabled)
+  iPad — HiDPI (disabled)
+      HiDPI not available (disabled)
+---
+  Turn Off HiDPI on All Displays
+---
+  Launch at Login
+✓ Automatic Updates
+  Check for Updates…
+---
+  Quit DisplayTweaks

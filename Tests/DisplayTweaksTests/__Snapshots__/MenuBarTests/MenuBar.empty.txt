@@ -1,0 +1,12 @@
+  DisplayTweaks Dev <version> (debug) (disabled)
+---
+  No External Display Connected (disabled)
+  HiDPI is available for external displays. (disabled)
+---
+  Turn Off HiDPI on All Displays (disabled)
+---
+  Launch at Login
+✓ Automatic Updates
+  Check for Updates…
+---
+  Quit DisplayTweaks
