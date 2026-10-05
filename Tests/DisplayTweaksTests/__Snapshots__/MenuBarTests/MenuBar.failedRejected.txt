@@ -1,9 +1,8 @@
   DisplayTweaks Dev <version> (debug) (disabled)
 ---
-  DELL S2725DSM (Main) — HiDPI
-      Off (disabled)
-  DELL S2725DC — HiDPI
-      Failed — macOS rejected the change. Choose HiDPI to retry. (disabled)
+  Displays
+  DELL S2725DSM (Main) — HiDPI Off · 144 Hz ▸
+  DELL S2725DC — Failed — macOS rejected the change ▸
 ---
   Turn Off HiDPI on All Displays (disabled)
 ---

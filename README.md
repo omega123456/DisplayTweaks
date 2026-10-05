@@ -55,17 +55,21 @@ swift run DisplayTweaks --self-test
 
 ## Usage
 
-The menu bar item shows a display icon (with "DEV" in development builds). Its menu lists every external display, left to right, with two rows each:
+The menu bar item shows a display icon (with "DEV" in development builds). Its menu lists every external display under **Displays**, left to right. Each display is one row with its name and a one-line status. Displays with the same name get " 1", " 2", …, and the main display carries a **Main** badge.
 
-- **‹Display name› — HiDPI** — the toggle, checked when HiDPI is on. Choose it to switch HiDPI on or off. Displays with the same name get " 1", " 2", … The main display's name ends in " (Main)", after any number: `DELL 1 (Main) — HiDPI`.
-- An info row below it with the display's state:
-
-| State | Info row |
+| State | Status line |
 |---|---|
-| Off | `Off` |
-| On | `Looks like 2560 × 1440 (5120 × 2880 backing) · 144 Hz` |
-| Failed | `Failed — no HiDPI mode at 120 Hz. Choose HiDPI to retry.` or `Failed — macOS rejected the change. Choose HiDPI to retry.` Choose the toggle to try again. The menu bar icon shows a warning badge. Only turning HiDPI on can fail this way: if macOS rejects turning it off, the display stays On and shows as On. |
-| Not available | `HiDPI not available` — macOS generates no native-size HiDPI mode for this display (for example Sidecar, AirPlay, DisplayLink, or a panel too large for the GPU). Its toggle is dimmed. |
+| On | `HiDPI · 2560 × 1440 · 144 Hz` |
+| Off | `HiDPI Off · 144 Hz` |
+| Failed | `Failed — no HiDPI mode at 120 Hz` or `Failed — macOS rejected the change`. The menu bar icon shows a warning badge. Only turning HiDPI on can fail this way: if macOS rejects turning it off, the display stays On and shows as On. |
+| Not available | `HiDPI not available` — macOS generates no native-size HiDPI mode for this display (for example Sidecar, AirPlay, DisplayLink, or a panel too large for the GPU). The row doesn't open. |
+| Disabled | `Disabled` — you disabled it from this menu. |
+
+Click a display to open its options in place; the menu stays open, and it remembers which displays you opened until you quit. With a single display, it starts open.
+
+- **HiDPI** — checked when HiDPI is on. Choose it to switch HiDPI on or off (or to retry after a failure). The line below says what the display looks like.
+- **Disable Display** — turns the display off as if it were unplugged, without touching the cable. It is dimmed on the last active display (“Can’t disable the only active display”); a built-in display with its lid open counts as active.
+- **Enable Display** — on a disabled display, turns it back on. DisplayTweaks then restores its remembered HiDPI choice.
 
 Below the displays:
 
@@ -81,12 +85,13 @@ HiDPI uses the display's current refresh rate. To get HiDPI at another rate, pic
 - **HiDPI stays on after you quit.** macOS saves the choice itself, so quitting or uninstalling DisplayTweaks changes nothing. To go back to native, use **Turn Off HiDPI on All Displays with every display connected** before quitting or uninstalling. Disconnected displays keep their saved HiDPI.
 - **Remembered per display.** DisplayTweaks remembers each display's choice and turns HiDPI back on after a reconnect, wake or launch if macOS didn't restore it. On first sight it adopts whatever the display is already set to, including HiDPI set by another app.
 - **System Settings wins.** Picking another resolution for a display in System Settings counts as turning HiDPI off for it, and DisplayTweaks won't turn it back on. Within 10 s of a reconnect or wake, changes aren't read this way, because macOS may still be restoring the display's mode.
+- **Disabling lasts for the login session.** A disabled display stays off when you quit DisplayTweaks, and comes back by itself after a logout or restart. If DisplayTweaks isn't running, power-cycle or replug the display to get it back.
 - **The screen blinks** for about a second on each switch, as with any resolution change. Displays never move in the arrangement.
 - DisplayTweaks reacts to display events only: it costs nothing while idle.
 
 ## Known limitations
 
-- DisplayTweaks uses three private CoreGraphics functions. A macOS update may change or remove them; DisplayTweaks then shows "HiDPI Unavailable" instead of switching.
+- DisplayTweaks uses four private CoreGraphics functions. A macOS update may change or remove them; DisplayTweaks then shows "HiDPI Unavailable" instead of switching, or leaves out Disable Display.
 - Only displays for which macOS generates the hidden native-size HiDPI mode are supported.
 - HiDPI stays on after you quit (see above).
 - A resolution change in System Settings turns HiDPI off for that display.

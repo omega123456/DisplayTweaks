@@ -6,6 +6,8 @@
           Looks like 2560 × 1440 (5120 × 2880 backing) · 144 Hz (disabled)
       Disable Display (disabled)
           Can’t disable the only active display (disabled)
+  DELL S2725DC — Disabled ▾
+      Enable Display
 ---
   Turn Off HiDPI on All Displays
 ---

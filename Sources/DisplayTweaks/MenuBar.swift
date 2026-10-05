@@ -1,7 +1,8 @@
 import AppKit
 
 /// The status item and its menu (R-13, R-14). The menu is rebuilt each time it opens (DD-8) from the controller's
-/// cached state: plain NSMenuItems, no key equivalents, no custom views. Copy and icon state come from `Displays`.
+/// cached state, with no key equivalents. Each display is a header item drawn by `DisplayRowView` that opens in place
+/// into plain option items; everything else is plain NSMenuItems. Copy and icon state come from `Displays`.
 final class MenuBar: NSObject, NSMenuDelegate {
     #if DEBUG
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength) // room for "DEV"
@@ -14,6 +15,11 @@ final class MenuBar: NSObject, NSMenuDelegate {
     static var showsStatusItem = true
 
     let controller: HiDPIController
+    /// The rows the open menu shows, and the headers clicked open or shut since launch (`Displays.isOpen`).
+    private var shown: [Displays.Row] = []
+    private var toggled: Set<String> = []
+    /// Marks option items, so closing a header removes exactly its own.
+    private static let optionTag = 1
 
     init(controller: HiDPIController) {
         self.controller = controller
@@ -45,35 +51,43 @@ final class MenuBar: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         updateImage()
         menu.removeAllItems()
+        menu.minimumWidth = 0
         #if DEBUG
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         add("DisplayTweaks Dev \(version) (debug)").isEnabled = false
         menu.addItem(.separator())
         #endif
-        let rows = controller.rows
+        shown = controller.rows
         if !controller.isAvailable { // R-11
             add(Displays.unavailableTitle).isEnabled = false
             add(Displays.unavailableInfo).isEnabled = false
-        } else if rows.isEmpty {
+        } else if shown.isEmpty {
             add(Displays.emptyTitle).isEnabled = false
             add(Displays.emptyInfo).isEnabled = false
+        } else {
+            menu.addItem(.sectionHeader(title: Displays.listTitle))
         }
-        for row in rows { // R-1, R-13: a toggle and an indented, disabled info row per display
-            let toggle = add(row.title, #selector(toggle(_:)), on: row.state == .on)
-            toggle.representedObject = row.uuid
-            toggle.isEnabled = row.isEnabled // Not available: dimmed (R-2)
-            let info = add(row.info)
-            info.isEnabled = false
-            info.indentationLevel = 1
+        var shut: [NSMenuItem] = []
+        for row in shown { // R-1, R-13: a header per display, opened into its options
+            let header = add(row.title, row.options.isEmpty ? nil : #selector(toggleOpen(_:)))
+            header.representedObject = row.uuid
+            header.isEnabled = !row.options.isEmpty // Not available: nothing to open (R-2)
+            let open = Displays.isOpen(row.uuid, rowCount: shown.count, toggled: toggled)
+            header.view = DisplayRowView(row: row, isOpen: open) { [weak self, weak header] in header.map { self?.toggleOpen($0) } }
+            insertOptions(row, after: header)
+            if !open { shut.append(header) }
         }
         menu.addItem(.separator())
-        add(Displays.turnOffAllTitle, #selector(turnOffAll)).isEnabled = Displays.canTurnOffAll(rows) // R-9
+        add(Displays.turnOffAllTitle, #selector(turnOffAll)).isEnabled = Displays.canTurnOffAll(shown) // R-9
         menu.addItem(.separator())
         add("Launch at Login", #selector(toggleLaunchAtLogin), on: LaunchAtLogin.isEnabled)
         add("Automatic Updates", #selector(toggleUpdates), on: Updater.isEnabled)
         add("Check for Updates…", #selector(checkForUpdates))
         menu.addItem(.separator())
         add("Quit DisplayTweaks", #selector(quit))
+        // Measured with every display open, so opening one never resizes the menu.
+        menu.minimumWidth = menu.size.width
+        shut.forEach(removeOptions)
     }
 
     @discardableResult
@@ -85,12 +99,148 @@ final class MenuBar: NSObject, NSMenuDelegate {
         return item
     }
 
+    private func insertOptions(_ row: Displays.Row, after header: NSMenuItem) {
+        var index = menu.index(of: header)
+        for option in row.options {
+            let action: Selector? = switch option.action {
+            case .hiDPI: #selector(toggle(_:))
+            case .disable: #selector(disable(_:))
+            case .enable: #selector(enable(_:))
+            case nil: nil
+            }
+            let item = NSMenuItem(title: option.title, action: action, keyEquivalent: "")
+            item.target = action == nil ? nil : self
+            item.state = option.isOn ? .on : .off
+            item.isEnabled = option.isEnabled && action != nil
+            item.indentationLevel = action == nil ? 2 : 1
+            item.representedObject = row.uuid
+            item.tag = Self.optionTag
+            index += 1
+            menu.insertItem(item, at: index)
+        }
+    }
+
     // MARK: Actions
 
+    /// A header click opens or shuts the display's options in place; the menu stays open (DD-8).
+    @objc private func toggleOpen(_ header: NSMenuItem) {
+        guard let uuid = header.representedObject as? String, let row = shown.first(where: { $0.uuid == uuid }) else { return }
+        toggled.formSymmetricDifference([uuid])
+        let open = Displays.isOpen(uuid, rowCount: shown.count, toggled: toggled)
+        (header.view as? DisplayRowView)?.isOpen = open
+        open ? insertOptions(row, after: header) : removeOptions(after: header)
+    }
+
+    private func removeOptions(after header: NSMenuItem) {
+        let next = menu.index(of: header) + 1
+        while next < menu.numberOfItems, menu.item(at: next)?.tag == Self.optionTag { menu.removeItem(at: next) }
+    }
+
     @objc private func toggle(_ sender: NSMenuItem) { (sender.representedObject as? String).map(controller.toggle) }
+    @objc private func disable(_ sender: NSMenuItem) { (sender.representedObject as? String).map(controller.disable) }
+    @objc private func enable(_ sender: NSMenuItem) { (sender.representedObject as? String).map(controller.enable) }
     @objc private func turnOffAll() { controller.turnOffAll() }
     @objc private func toggleLaunchAtLogin() { LaunchAtLogin.toggle() }
     @objc private func toggleUpdates() { Updater.toggle() }
     @objc private func checkForUpdates() { Updater.check(manual: true) }
     @objc private func quit() { Env.terminate() } // R-12: no display changes
+}
+
+/// A display's header in the menu: symbol, name, Main badge, one-line status and a chevron when it opens. It draws
+/// its own highlight (menus don't for view items) and handles the click itself, so the menu stays open. The item's
+/// title stays set for VoiceOver and type-select; Return on a highlighted header sends the item's action instead.
+final class DisplayRowView: NSView {
+    let row: Displays.Row
+    var isOpen: Bool { didSet { needsDisplay = true; setAccessibilityExpanded(isOpen) } }
+    private let onClick: () -> Void
+
+    private static let nameFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
+    private static let statusFont = NSFont.systemFont(ofSize: 11)
+    private static let badgeFont = NSFont.systemFont(ofSize: 10, weight: .semibold)
+    private static let textX: CGFloat = 44
+
+    init(row: Displays.Row, isOpen: Bool, onClick: @escaping () -> Void) {
+        self.row = row
+        self.isOpen = isOpen
+        self.onClick = onClick
+        let name = (row.name as NSString).size(withAttributes: [.font: Self.nameFont]).width + (row.isMain ? 44 : 0)
+        let status = (row.status as NSString).size(withAttributes: [.font: Self.statusFont]).width
+        super.init(frame: NSRect(x: 0, y: 0, width: max(260, Self.textX + max(name, status) + 40), height: 42))
+        autoresizingMask = .width
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("\(row.title), \(row.status)")
+        setAccessibilityEnabled(!row.options.isEmpty)
+        if !row.options.isEmpty { setAccessibilityExpanded(isOpen) }
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    var isOpenable: Bool { !row.options.isEmpty }
+    private var isHighlighted: Bool { isOpenable && enclosingMenuItem?.isHighlighted == true }
+
+    override func mouseUp(with event: NSEvent) { if isOpenable { onClick() } }
+    override func accessibilityPerformPress() -> Bool {
+        if isOpenable { onClick() }
+        return isOpenable
+    }
+
+    /// The approved mockup's monitor: a 26 pt outline screen (21 × 13.5, radius 2) on a stand, 1.5 pt strokes,
+    /// drawn in the mockup's top-down coordinates.
+    private func drawMonitor(color: NSColor) {
+        NSGraphicsContext.saveGraphicsState()
+        let flip = NSAffineTransform()
+        flip.translateX(by: 10, yBy: (bounds.height + 26) / 2)
+        flip.scaleX(by: 1, yBy: -1)
+        flip.concat()
+        color.setStroke()
+        let path = NSBezierPath(roundedRect: NSRect(x: 2.5, y: 4, width: 21, height: 13.5), xRadius: 2, yRadius: 2)
+        path.move(to: NSPoint(x: 9.5, y: 22))
+        path.line(to: NSPoint(x: 16.5, y: 22))
+        path.move(to: NSPoint(x: 13, y: 17.5))
+        path.line(to: NSPoint(x: 13, y: 22))
+        path.lineWidth = 1.5
+        path.stroke()
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let lit = isHighlighted
+        if lit {
+            NSColor.selectedContentBackgroundColor.setFill()
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 5, dy: 1), xRadius: 7, yRadius: 7).fill()
+        }
+        let ink: NSColor = lit ? .selectedMenuItemTextColor : .labelColor
+        let faint: NSColor = lit ? .selectedMenuItemTextColor : .secondaryLabelColor
+        let dimmed = row.state == .disabled
+
+        drawMonitor(color: dimmed ? faint.withAlphaComponent(0.25) : faint)
+
+        let name = NSAttributedString(string: row.name, attributes: [.font: Self.nameFont,
+                                                                      .foregroundColor: dimmed ? faint : ink])
+        let nameSize = name.size()
+        let nameY = bounds.height / 2 + 1
+        name.draw(at: NSPoint(x: Self.textX, y: nameY))
+        if row.isMain {
+            let badge = NSAttributedString(string: "Main", attributes: [.font: Self.badgeFont,
+                                                                         .foregroundColor: lit ? ink : NSColor.controlAccentColor])
+            let b = badge.size()
+            let rect = NSRect(x: Self.textX + nameSize.width + 6, y: nameY + (nameSize.height - b.height - 2) / 2,
+                              width: b.width + 10, height: b.height + 2)
+            (lit ? NSColor.white.withAlphaComponent(0.25) : NSColor.controlAccentColor.withAlphaComponent(0.15)).setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4).fill()
+            badge.draw(at: NSPoint(x: rect.minX + 5, y: rect.minY + 1))
+        }
+        NSAttributedString(string: row.status, attributes: [.font: Self.statusFont, .foregroundColor: faint])
+            .draw(at: NSPoint(x: Self.textX, y: bounds.height / 2 - 15))
+
+        guard isOpenable else { return }
+        let chevronConfig = NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold).applying(.init(paletteColors: [faint]))
+        if let chevron = NSImage(systemSymbolName: isOpen ? "chevron.down" : "chevron.right", accessibilityDescription: nil)?
+            .withSymbolConfiguration(chevronConfig) {
+            let size = chevron.size
+            chevron.draw(in: NSRect(x: bounds.width - 22 - size.width / 2, y: (bounds.height - size.height) / 2,
+                                    width: size.width, height: size.height))
+        }
+    }
 }

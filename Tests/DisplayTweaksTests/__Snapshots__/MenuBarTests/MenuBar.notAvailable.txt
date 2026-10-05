@@ -1,9 +1,11 @@
   DisplayTweaks Dev <version> (debug) (disabled)
 ---
-  DELL S2725DC — HiDPI
-      Off (disabled)
-  iPad — HiDPI (disabled)
-      HiDPI not available (disabled)
+  Displays
+  DELL S2725DC — HiDPI Off · 144 Hz ▾
+      HiDPI
+          Looks like 2560 × 1440 · 144 Hz (disabled)
+      Disable Display
+  iPad — HiDPI not available (disabled)
 ---
   Turn Off HiDPI on All Displays (disabled)
 ---

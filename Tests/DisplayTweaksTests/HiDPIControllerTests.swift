@@ -354,12 +354,12 @@ extension Desktop {
             h.world.displays = [dsmDisplay(on: true), dcDisplay()]
             h.world.main = 1
             let c = h.controller() // the controller holds the trampoline's handler weakly: keep it alive
-            #expect(c.rows.map(\.title) == ["DELL S2725DSM (Main) — HiDPI", "DELL S2725DC — HiDPI"])
+            #expect(c.rows.map(\.title) == ["DELL S2725DSM (Main)", "DELL S2725DC"])
             h.world.setMain(2)
             await settle()
-            #expect(c.rows.map(\.title) == ["DELL S2725DSM (Main) — HiDPI", "DELL S2725DC — HiDPI"]) // still debouncing
+            #expect(c.rows.map(\.title) == ["DELL S2725DSM (Main)", "DELL S2725DC"]) // still debouncing
             h.world.advance(Displays.debounce)
-            #expect(c.rows.map(\.title) == ["DELL S2725DSM — HiDPI", "DELL S2725DC (Main) — HiDPI"])
+            #expect(c.rows.map(\.title) == ["DELL S2725DSM", "DELL S2725DC (Main)"])
             #expect(h.log.contains("event DELL S2725DC DELL S27: flags=none decision=nothing"))
             #expect(h.world.switches.isEmpty)
             #expect(record(dc)?.name == "DELL S2725DC") // the record keeps the name without (Main)

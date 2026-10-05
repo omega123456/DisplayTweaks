@@ -16,6 +16,9 @@ struct DisplayRecord: Codable, Equatable {
     /// The localized display name, rewritten when it changes (R-1).
     var name: String
     var version = DisplayRecord.currentVersion
+    /// The display ID while DisplayTweaks has the display disabled; nil while it's enabled. Kept because macOS may stop
+    /// listing a disabled display, and then Enable Display can only reach it through this ID (ADR 2132bdb2).
+    var disabledID: UInt32? = nil
 }
 
 enum Displays {
@@ -60,6 +63,8 @@ enum Displays {
         var isBuiltIn: Bool
         /// The main display (owner request overriding part of R-1: its toggle row gets " (Main)").
         var isMain = false
+        /// Connected, awake and drawing (`CGDisplayIsActive`). Counts towards the last-active-display guard.
+        var isActive = true
         var origin: CGPoint
         /// The current public mode.
         var points: Size
@@ -73,8 +78,8 @@ enum Displays {
 
     enum Failure: Error, Equatable { case rejected, noMode(Int) }
 
-    /// The per-display runtime state (R-3, R-10, R-2).
-    enum State: Equatable { case off, on, failed(Failure), notAvailable }
+    /// The per-display runtime state (R-3, R-10, R-2). `disabled`: DisplayTweaks disabled the display.
+    enum State: Equatable { case off, on, failed(Failure), notAvailable, disabled }
 
     /// Reconfiguration flags merged per display over a batch (DD-4). `recheck` marks the one extra debounce after
     /// an unsettled (0 Hz) reading: it decides like `added` but, not being an add, doesn't restart the settle grace (DD-6).
@@ -95,13 +100,29 @@ enum Displays {
     /// The event decision for one display (DD-4).
     enum Decision: String { case nothing, reapply, rememberOff, rememberOn, recheck }
 
-    /// One display's two menu rows (DD-8).
+    /// What a display's option item does.
+    enum Action { case hiDPI, disable, enable }
+
+    /// One item in a display's opened options; no action: an indented info line.
+    struct Option: Equatable {
+        var title: String
+        var action: Action?
+        var isOn = false
+        var isEnabled = true
+    }
+
+    /// One display in the menu list (DD-8): a header (name, Main badge, one-line status) that opens into options.
     struct Row: Equatable {
         var uuid: String
-        var title: String
-        var info: String
+        /// The display name, numbered among duplicates, without " (Main)".
+        var name: String
+        var isMain: Bool
+        var status: String
         var state: State
-        var isEnabled: Bool { state != .notAvailable }
+        /// Empty: the header doesn't open (an ineligible display such as an iPad).
+        var options: [Option]
+        /// The header item's title, for VoiceOver, type-select and the outline (owner request: " (Main)").
+        var title: String { isMain ? "\(name) (Main)" : name }
     }
 
     // MARK: Mode table (DD-2, NFR-4)
@@ -183,13 +204,25 @@ enum Displays {
         nativeMode(e, refresh: refresh(e, userStarted: false)).map { .success($0) } ?? .failure(.rejected)
     }
 
-    /// The menu toggle (R-4, R-5, R-10): On turns off, Off and Failed turn on (a retry), Not available does nothing.
+    /// The menu toggle (R-4, R-5, R-10): On turns off, Off and Failed turn on (a retry), Not available and
+    /// Disabled do nothing.
     static func toggleTarget(_ state: State) -> DisplayRecord.Choice? {
         switch state {
         case .on: return .off
         case .off, .failed: return .on
-        case .notAvailable: return nil
+        case .notAvailable, .disabled: return nil
         }
+    }
+
+    // MARK: Disable and enable (ADR 2132bdb2)
+
+    /// Never the last active display, so the desktop can't go dark. A closed-lid built-in isn't active.
+    static func canDisable(activeCount: Int) -> Bool { activeCount > 1 }
+
+    /// Success is a completed transaction and a re-read showing the display active (enable) or inactive or gone
+    /// (disable).
+    static func enabledOutcome(_ enable: Bool, completed: Bool, after: Entry?) -> Bool {
+        completed && (after?.isActive == true) == enable
     }
 
     /// R-4, R-5: success is a completed transaction and a re-read showing the target (for Off: not still On).
@@ -241,18 +274,14 @@ enum Displays {
     /// The name stored in the record.
     static func baseName(_ e: Entry) -> String { e.name ?? "External Display" }
 
-    /// Menu names in list order: every duplicate gets " 1", " 2", …, then the main display " (Main)" (owner
-    /// request overriding part of R-1, FancyMacZones' convention). Display copy only: the record keeps `baseName`.
-    static func names(_ listed: [Entry]) -> [String] {
-        let base = listed.map(baseName)
+    /// Menu names in list order: every duplicate gets " 1", " 2", …. The main display's " (Main)" is added by
+    /// `Row.title` (owner request overriding part of R-1). Display copy only: the record keeps `baseName`.
+    static func names(_ base: [String]) -> [String] {
         var seen: [String: Int] = [:]
-        return zip(listed, base).map { e, name in
-            var out = name
-            if base.filter({ $0 == name }).count > 1 {
-                seen[name, default: 0] += 1
-                out += " \(seen[name]!)"
-            }
-            return e.isMain ? out + " (Main)" : out
+        return base.map { name in
+            guard base.filter({ $0 == name }).count > 1 else { return name }
+            seen[name, default: 0] += 1
+            return "\(name) \(seen[name]!)"
         }
     }
 
@@ -263,6 +292,12 @@ enum Displays {
     static let unavailableTitle = "HiDPI Unavailable"
     static let unavailableInfo = "This version of macOS doesn\u{2019}t support it."
     static let turnOffAllTitle = "Turn Off HiDPI on All Displays"
+    static let listTitle = "Displays"
+    static let hiDPITitle = "HiDPI"
+    static let disableTitle = "Disable Display"
+    static let enableTitle = "Enable Display"
+    static let onlyActiveInfo = "Can\u{2019}t disable the only active display"
+    static let enableFailedInfo = "Couldn\u{2019}t enable it. Reconnect the display."
 
     static func reason(_ f: Failure) -> String {
         switch f {
@@ -271,24 +306,65 @@ enum Displays {
         }
     }
 
-    /// The info row per state (state/copy table).
-    static func info(_ state: State, _ e: Entry) -> String {
+    /// The header's one-line status.
+    static func status(_ state: State, _ e: Entry?) -> String {
+        let hz = e.map { refresh($0, userStarted: false) } ?? 0
         switch state {
-        case .off: return "Off"
-        case .on:
-            return "Looks like \(e.points.width) × \(e.points.height) "
-                + "(\(e.pixels.width) × \(e.pixels.height) backing) · \(refresh(e, userStarted: false)) Hz"
-        case .failed(let f): return "Failed — \(reason(f)). Choose HiDPI to retry."
+        case .on: return "HiDPI · \(e?.points.width ?? 0) × \(e?.points.height ?? 0) · \(hz) Hz"
+        case .off: return "HiDPI Off · \(hz) Hz"
+        case .failed(let f): return "Failed — \(reason(f))"
         case .notAvailable: return "HiDPI not available"
+        case .disabled: return "Disabled"
         }
     }
 
-    static func rows(_ listed: [Entry], failures: [String: Failure]) -> [Row] {
-        zip(listed, names(listed)).map { e, name in
-            let state = state(e, failure: failures[e.uuid])
-            return Row(uuid: e.uuid, title: "\(name) — HiDPI", info: info(state, e), state: state)
+    /// The info line under the HiDPI option.
+    static func info(_ state: State, _ e: Entry) -> String {
+        let hz = refresh(e, userStarted: false)
+        switch state {
+        case .on:
+            return "Looks like \(e.points.width) × \(e.points.height) (\(e.pixels.width) × \(e.pixels.height) backing) · \(hz) Hz"
+        case .failed: return "Choose HiDPI to retry."
+        default: return "Looks like \(e.points.width) × \(e.points.height) · \(hz) Hz"
         }
     }
+
+    /// A display's options: HiDPI and its info line, then Disable Display (left out when the function is missing,
+    /// `activeCount` nil), dimmed with the reason on the last active display. A disabled display only offers Enable
+    /// Display; an ineligible one nothing (it can't be disabled either: Sidecar and AirPlay manage themselves).
+    static func options(_ state: State, _ e: Entry?, activeCount: Int?, enableFailed: Bool = false) -> [Option] {
+        switch state {
+        case .notAvailable: return []
+        case .disabled:
+            return [Option(title: enableTitle, action: .enable)] + (enableFailed ? [Option(title: enableFailedInfo)] : [])
+        case .on, .off, .failed:
+            var out = [Option(title: hiDPITitle, action: .hiDPI, isOn: state == .on)]
+            if let e { out.append(Option(title: info(state, e))) }
+            guard let activeCount else { return out }
+            let allowed = canDisable(activeCount: activeCount)
+            out.append(Option(title: disableTitle, action: .disable, isEnabled: allowed))
+            return allowed ? out : out + [Option(title: onlyActiveInfo)]
+        }
+    }
+
+    /// The listed displays, then the disabled ones (which macOS no longer lists) by name.
+    static func rows(_ listed: [Entry], failures: [String: Failure], disabled: [String: DisplayRecord] = [:],
+                     activeCount: Int? = nil) -> [Row] {
+        let off = disabled.sorted { ($0.value.name, $0.key) < ($1.value.name, $1.key) }
+        let numbered = names(listed.map(baseName) + off.map(\.value.name))
+        let shown = zip(listed, numbered).map { e, name in
+            let state = state(e, failure: failures[e.uuid])
+            return Row(uuid: e.uuid, name: name, isMain: e.isMain, status: status(state, e), state: state,
+                       options: options(state, e, activeCount: activeCount))
+        }
+        return shown + zip(off, numbered.dropFirst(listed.count)).map { d, name in
+            Row(uuid: d.key, name: name, isMain: false, status: status(.disabled, nil), state: .disabled,
+                options: options(.disabled, nil, activeCount: activeCount, enableFailed: failures[d.key] != nil))
+        }
+    }
+
+    /// The header opens with a click; a lone display starts open. `toggled`: headers the user clicked this run.
+    static func isOpen(_ uuid: String, rowCount: Int, toggled: Set<String>) -> Bool { (rowCount == 1) != toggled.contains(uuid) }
 
     /// R-9: enabled when any connected display is On.
     static func canTurnOffAll(_ rows: [Row]) -> Bool { rows.contains { $0.state == .on } }

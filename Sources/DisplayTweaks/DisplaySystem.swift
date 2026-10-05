@@ -19,6 +19,10 @@ enum DisplaySystem {
         var now: () -> Double = { ProcessInfo.processInfo.systemUptime }
         /// Runs work once on the main queue after a delay: the debounce (DD-4).
         var after: (Double, @escaping () -> Void) -> Void = { DispatchQueue.main.asyncAfter(deadline: .now() + $0, execute: $1) }
+        /// The fourth private function resolved: Disable Display is offered (ADR 2132bdb2).
+        var canDisable: () -> Bool = { configureEnabled != nil }
+        /// One session-scoped transaction enabling or disabling a display; the completion result.
+        var setEnabled: (CGDirectDisplayID, Bool) -> CGError = enableTransaction
     }
     static var backend = Backend()
 
@@ -40,6 +44,16 @@ enum DisplaySystem {
         guard begun == .success else { return begun }
         functions?.configureMode(token, id, number)
         return CGCompleteDisplayConfiguration(token, .permanently)
+    }
+
+    /// Begin → enable or disable with the begin call's token → complete for this login session only, so a logout
+    /// or restart always brings the display back (ADR 2132bdb2). Never run by tests.
+    static func enableTransaction(_ id: CGDirectDisplayID, _ enabled: Bool) -> CGError {
+        var token: CGDisplayConfigRef?
+        let begun = CGBeginDisplayConfiguration(&token)
+        guard begun == .success else { return begun }
+        configureEnabled?(token, id, enabled)
+        return CGCompleteDisplayConfiguration(token, .forSession)
     }
 
     // MARK: Callback (DD-4)
@@ -77,7 +91,8 @@ enum DisplaySystem {
                 .first { $0.ioFlags & UInt32(kDisplayModeNativeFlag) != 0 && $0.pixelWidth == $0.width }
             let screen = screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == id }
             return Displays.Entry(id: id, uuid: CFUUIDCreateString(nil, uuid) as String, name: screen?.localizedName,
-                                  isBuiltIn: CGDisplayIsBuiltin(id) != 0, isMain: CGDisplayIsMain(id) != 0, origin: CGDisplayBounds(id).origin,
+                                  isBuiltIn: CGDisplayIsBuiltin(id) != 0, isMain: CGDisplayIsMain(id) != 0,
+                                  isActive: CGDisplayIsActive(id) != 0, origin: CGDisplayBounds(id).origin,
                                   points: Displays.Size(width: current.width, height: current.height),
                                   pixels: Displays.Size(width: current.pixelWidth, height: current.pixelHeight),
                                   refresh: current.refreshRate,
@@ -99,9 +114,9 @@ enum DisplaySystem {
         }.filter(Displays.isPlausible)
     }
 
-    // MARK: Private functions (DD-1, ADR 50914964)
+    // MARK: Private functions (DD-1, ADR 50914964, ADR 2132bdb2)
 
-    // The ABI contract of DD-1. All three return nothing.
+    // The ABI contract of DD-1. All four return nothing.
     /// Mode count: display ID, out-pointer to the count (initialise it to 0).
     typealias ModeCountFn = @convention(c) (CGDirectDisplayID, UnsafeMutablePointer<Int32>) -> Void
     /// Mode descriptor: display ID, 0-based index, caller buffer (zeroed before each call), buffer length (0xDC).
@@ -109,6 +124,8 @@ enum DisplaySystem {
     /// Select mode: the token of the public begin-configuration call (never a connection ID), display ID,
     /// and the descriptor's mode-number field (never the loop index).
     typealias ConfigureModeFn = @convention(c) (CGDisplayConfigRef?, CGDirectDisplayID, Int32) -> Void
+    /// Enable or disable: the begin call's token, display ID, enabled (ADR 2132bdb2).
+    typealias ConfigureEnabledFn = @convention(c) (CGDisplayConfigRef?, CGDirectDisplayID, Bool) -> Void
 
     struct Functions {
         let modeCount: ModeCountFn
@@ -121,6 +138,15 @@ enum DisplaySystem {
 
     /// Resolved once, at first use; nil when any of the three is missing (R-11, NFR-4).
     static let functions: Functions? = resolve(imagePath, symbols)
+
+    /// Resolved on its own: when it's missing, only Disable Display is left out; HiDPI still works.
+    static let enabledSymbol = "CGSConfigureDisplayEnabled"
+    static let configureEnabled: ConfigureEnabledFn? = resolveEnabled(imagePath, enabledSymbol)
+
+    static func resolveEnabled(_ path: String, _ name: String) -> ConfigureEnabledFn? {
+        guard let image = dlopen(path, RTLD_LAZY), let f = dlsym(image, name) else { return nil }
+        return unsafeBitCast(f, to: ConfigureEnabledFn.self)
+    }
 
     /// The three functions from the image at `path`, or nil if the image or any symbol can't be found.
     /// The image handle is deliberately never closed: the functions stay valid for the life of the process.

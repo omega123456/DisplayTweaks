@@ -97,10 +97,11 @@ final class FakeDisplayWorld {
         /// Overrides the reported refresh rate (0 = not settled).
         var refresh: Double?
         var isBuiltIn = false
+        var isActive = true
 
         func entry(main: CGDirectDisplayID?) -> Displays.Entry {
             SelfTest.entry(uuid, id: id, name: name, x: x, current: current, refresh: refresh, table: table,
-                           native: native, builtIn: isBuiltIn, main: id == main)
+                           native: native, builtIn: isBuiltIn, main: id == main, active: isActive)
         }
     }
 
@@ -116,6 +117,13 @@ final class FakeDisplayWorld {
     /// The transaction completes without error but the mode doesn't change.
     var ignoresSwitch = false
     var registrations = 0
+    /// Whether the enable/disable function resolved (Disable Display offered).
+    var canDisable = true
+    /// Every enable or disable as "<display id>:on" / "<display id>:off", in order.
+    var enables: [String] = []
+    /// A disabled display stays online but inactive, instead of leaving the list.
+    var disabledStaysOnline = false
+    private var parked: [Display] = []
 
     static func dell(_ id: CGDirectDisplayID, _ name: String, x: Int, on: Bool = false, hz: Int = 144) -> Display {
         let current = SelfTest.dellTable.first { $0.width == 2560 && $0.density == (on ? 2 : 1) && $0.refresh == hz }!
@@ -135,7 +143,28 @@ final class FakeDisplayWorld {
               configure: { [unowned self] in configure($0, $1) },
               register: { [unowned self] in registrations += 1 },
               now: { [unowned self] in now },
-              after: { [unowned self] delay, work in timers.append((now + delay, work)) })
+              after: { [unowned self] delay, work in timers.append((now + delay, work)) },
+              canDisable: { [unowned self] in canDisable },
+              setEnabled: { [unowned self] in setEnabled($0, $1) })
+    }
+
+    /// One enable or disable transaction, then its callback. An enabled display comes back at native 1× (macOS
+    /// dropping HiDPI), so the re-apply has something to do.
+    private func setEnabled(_ id: CGDirectDisplayID, _ on: Bool) -> CGError {
+        enables.append("\(id):\(on ? "on" : "off")")
+        guard error == .success else { return error }
+        if on, let i = parked.firstIndex(where: { $0.id == id }) { displays.append(parked.remove(at: i)) }
+        guard let i = displays.firstIndex(where: { $0.id == id }) else { return .success }
+        if on {
+            displays[i].isActive = true
+            displays[i].current = SelfTest.native144
+        } else if disabledStaysOnline {
+            displays[i].isActive = false
+        } else {
+            parked.append(displays.remove(at: i))
+        }
+        deliver(id, on ? .enabledFlag : .disabledFlag)
+        return .success
     }
 
     /// One transaction: takes 1 s, then WindowServer's callbacks (begin, then set-mode) arrive.
@@ -186,16 +215,18 @@ final class FakeDisplayWorld {
 }
 
 /// NSMenu can't be drawn offscreen (it renders only while tracking on a real display), so menus are compared as
-/// text: ✓ for on, then 4 spaces per indentation level, the title, (disabled); separators as ---; submenus
-/// indented before the checkmark column.
+/// text: ✓ for on, then 4 spaces per indentation level, the title, a display header's " — status ▸/▾", (disabled);
+/// separators as ---; submenus indented before the checkmark column.
 @MainActor
 func outline(_ menu: NSMenu, _ indent: String = "") -> String {
     menu.items.map { item in
         if item.isSeparatorItem { return indent + "---" }
         // The debug header carries the host bundle's version, which isn't ours under swift test.
         let title = item.title.hasPrefix("DisplayTweaks Dev ") ? "DisplayTweaks Dev <version> (debug)" : item.title
+        // A display header adds its status, then ▸ shut / ▾ open when it has options.
+        let header = (item.view as? DisplayRowView).map { " — \($0.row.status)" + ($0.isOpenable ? ($0.isOpen ? " ▾" : " ▸") : "") } ?? ""
         let line = indent + (item.state == .on ? "✓ " : "  ") + String(repeating: "    ", count: item.indentationLevel)
-            + title + (item.isEnabled ? "" : " (disabled)")
+            + title + header + (item.isEnabled ? "" : " (disabled)")
         return item.submenu.map { line + "\n" + outline($0, indent + "    ") } ?? line
     }.joined(separator: "\n")
 }

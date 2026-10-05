@@ -22,6 +22,15 @@ extension Desktop {
             #expect(Set(keys) == ["choice", "name", "version"])
         }
 
+        @Test func disabledRecords() throws {
+            store.save(DisplayRecord(choice: .on, name: "DELL S2725DC", disabledID: 2), for: "A")
+            store.save(DisplayRecord(choice: .on, name: "DELL S2725DSM"), for: "B")
+            #expect(store.disabled() == ["A": DisplayRecord(choice: .on, name: "DELL S2725DC", disabledID: 2)])
+            let json = try #require(h.defaults.data(forKey: "display.A"))
+            #expect(Set(try #require(JSONSerialization.jsonObject(with: json) as? [String: Any]).keys)
+                    == ["choice", "name", "version", "disabledID"])
+        }
+
         @Test func unreadableData() {
             h.defaults.set(Data("not json".utf8), forKey: "display.A")
             #expect(store.record(for: "A") == nil)

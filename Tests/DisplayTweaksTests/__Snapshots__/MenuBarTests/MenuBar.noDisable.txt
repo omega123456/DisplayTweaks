@@ -1,8 +1,9 @@
   DisplayTweaks Dev <version> (debug) (disabled)
 ---
   Displays
-  DELL S2725DSM (Main) — HiDPI · 2560 × 1440 · 144 Hz ▸
-  DELL S2725DC — HiDPI Off · 144 Hz ▸
+  DELL S2725DSM (Main) — HiDPI · 2560 × 1440 · 144 Hz ▾
+✓     HiDPI
+          Looks like 2560 × 1440 (5120 × 2880 backing) · 144 Hz (disabled)
 ---
   Turn Off HiDPI on All Displays
 ---

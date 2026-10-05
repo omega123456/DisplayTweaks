@@ -24,6 +24,7 @@ enum SelfTest {
             ("first-sight adoption", adoption),
             ("names and order", namesAndOrder),
             ("menu copy", menuCopy),
+            ("disable and enable", disableEnable),
             ("icon state", iconState),
         ]
         for (name, group) in groups {
@@ -64,8 +65,9 @@ enum SelfTest {
     /// A snapshot entry whose current mode is `current` (points = its size, pixels = size × density).
     static func entry(_ uuid: String = "A", id: UInt32 = 1, name: String? = "DELL", x: Int = 0, y: Int = 0,
                       current: Mode, refresh: Double? = nil, table: [Mode] = dellTable,
-                      native: Displays.Size? = dellNative, builtIn: Bool = false, main: Bool = false) -> Displays.Entry {
-        Displays.Entry(id: id, uuid: uuid, name: name, isBuiltIn: builtIn, isMain: main, origin: CGPoint(x: x, y: y),
+                      native: Displays.Size? = dellNative, builtIn: Bool = false, main: Bool = false,
+                      active: Bool = true) -> Displays.Entry {
+        Displays.Entry(id: id, uuid: uuid, name: name, isBuiltIn: builtIn, isMain: main, isActive: active, origin: CGPoint(x: x, y: y),
                        points: Displays.Size(width: current.width, height: current.height),
                        pixels: Displays.Size(width: Int(Float(current.width) * current.density),
                                              height: Int(Float(current.height) * current.density)),
@@ -262,13 +264,17 @@ enum SelfTest {
         let listed = Displays.listed([right, left, builtIn, follower, above])
         check("order: left to right, then top to bottom; built-in omitted", listed.map(\.uuid) == ["U", "L", "R", "F"])
         check("names: duplicates numbered in list order; no screen → External Display",
-              Displays.names(listed) == ["LG", "DELL 1", "DELL 2", "External Display"])
+              Displays.names(listed.map(Displays.baseName)) == ["LG", "DELL 1", "DELL 2", "External Display"])
         let main = entry("M", name: "DELL S2725DSM", current: native144, main: true)
-        check("names: the main display gets (Main)",
-              Displays.names([main, entry("D", name: "DELL S2725DC", x: 2560, current: native144)])
-                == ["DELL S2725DSM (Main)", "DELL S2725DC"])
+        let rows = Displays.rows([main, entry("D", name: "DELL S2725DC", x: 2560, current: native144)], failures: [:])
+        check("names: the main display's title gets (Main), its name doesn't",
+              rows.map(\.title) == ["DELL S2725DSM (Main)", "DELL S2725DC"] && rows[0].name == "DELL S2725DSM" && rows[0].isMain)
         check("names: a numbered duplicate gets the number, then (Main)",
-              Displays.names([left, entry("R", name: "DELL", x: 2560, current: native144, main: true)]) == ["DELL 1", "DELL 2 (Main)"])
+              Displays.rows([left, entry("R", name: "DELL", x: 2560, current: native144, main: true)], failures: [:]).map(\.title)
+                == ["DELL 1", "DELL 2 (Main)"])
+        let disabled = ["Z": DisplayRecord(choice: .on, name: "DELL", disabledID: 9)]
+        check("names: a disabled display is numbered with the listed ones and comes last",
+              Displays.rows([left], failures: [:], disabled: disabled).map(\.title) == ["DELL 1", "DELL 2"])
         check("names: the record and the log keep the name without (Main)",
               Displays.adopt(main).name == "DELL S2725DSM" && Displays.baseName(main) == "DELL S2725DSM")
     }
@@ -277,21 +283,68 @@ enum SelfTest {
 
     private static func menuCopy() {
         let on = entry(current: hiDPI144), off = entry(current: native144)
-        check("copy: Off", Displays.info(.off, off) == "Off")
-        check("copy: On", Displays.info(.on, on) == "Looks like 2560 × 1440 (5120 × 2880 backing) · 144 Hz")
-        check("copy: Failed, no mode", Displays.info(.failed(.noMode(120)), off) == "Failed — no HiDPI mode at 120 Hz. Choose HiDPI to retry.")
-        check("copy: Failed, rejected", Displays.info(.failed(.rejected), off) == "Failed — macOS rejected the change. Choose HiDPI to retry.")
-        check("copy: Not available", Displays.info(.notAvailable, off) == "HiDPI not available")
+        check("status: On", Displays.status(.on, on) == "HiDPI · 2560 × 1440 · 144 Hz")
+        check("status: Off", Displays.status(.off, entry(current: mode(80, 0, 2560, 1440, 1, 100))) == "HiDPI Off · 100 Hz")
+        check("status: Failed, no mode", Displays.status(.failed(.noMode(120)), off) == "Failed — no HiDPI mode at 120 Hz")
+        check("status: Failed, rejected", Displays.status(.failed(.rejected), off) == "Failed — macOS rejected the change")
+        check("status: Not available", Displays.status(.notAvailable, off) == "HiDPI not available")
+        check("status: Disabled", Displays.status(.disabled, nil) == "Disabled")
+        check("info: On", Displays.info(.on, on) == "Looks like 2560 × 1440 (5120 × 2880 backing) · 144 Hz")
+        check("info: Off", Displays.info(.off, off) == "Looks like 2560 × 1440 · 144 Hz")
+        check("info: Failed", Displays.info(.failed(.rejected), off) == "Choose HiDPI to retry.")
+        check("copy: options", Displays.hiDPITitle == "HiDPI" && Displays.disableTitle == "Disable Display"
+              && Displays.enableTitle == "Enable Display" && Displays.listTitle == "Displays"
+              && Displays.onlyActiveInfo == "Can\u{2019}t disable the only active display"
+              && Displays.enableFailedInfo == "Couldn\u{2019}t enable it. Reconnect the display.")
         check("copy: unavailable, with U+2019", Displays.unavailableTitle == "HiDPI Unavailable"
               && Displays.unavailableInfo == "This version of macOS doesn\u{2019}t support it.")
         check("copy: empty", Displays.emptyTitle == "No External Display Connected"
               && Displays.emptyInfo == "HiDPI is available for external displays.")
         check("copy: Turn Off All", Displays.turnOffAllTitle == "Turn Off HiDPI on All Displays")
         let rows = Displays.rows([on, entry("B", current: native144, table: [])], failures: ["A": .rejected])
-        check("rows: title, state and enabling", rows.map(\.title) == ["DELL 1 — HiDPI", "DELL 2 — HiDPI"]
-              && rows[0].state == .failed(.rejected) && rows[0].isEnabled && !rows[1].isEnabled)
+        check("rows: title, state and whether it opens", rows.map(\.title) == ["DELL 1", "DELL 2"]
+              && rows[0].state == .failed(.rejected) && !rows[0].options.isEmpty && rows[1].options.isEmpty)
         check("turn off all: enabled only with a display On", Displays.canTurnOffAll(Displays.rows([on], failures: [:]))
               && !Displays.canTurnOffAll(rows))
+    }
+
+    // MARK: Disable and enable (ADR 2132bdb2)
+
+    private static func disableEnable() {
+        let on = entry(current: hiDPI144)
+        typealias O = Displays.Option
+        let hiDPI = O(title: "HiDPI", action: .hiDPI, isOn: true), info = O(title: Displays.info(.on, on))
+        check("guard: never the last active display", Displays.canDisable(activeCount: 2) && !Displays.canDisable(activeCount: 1))
+        check("options: HiDPI, its info, Disable Display", Displays.options(.on, on, activeCount: 2)
+              == [hiDPI, info, O(title: "Disable Display", action: .disable)])
+        check("options: the last active display gets a dimmed Disable Display and the reason",
+              Displays.options(.on, on, activeCount: 1)
+                == [hiDPI, info, O(title: "Disable Display", action: .disable, isEnabled: false), O(title: Displays.onlyActiveInfo)])
+        check("options: no Disable Display without the function", Displays.options(.on, on, activeCount: nil) == [hiDPI, info])
+        check("options: Off and Failed offer HiDPI unchecked", Displays.options(.off, on, activeCount: nil).first?.isOn == false
+              && Displays.options(.failed(.rejected), on, activeCount: nil).first?.action == .hiDPI)
+        check("options: Not available offers nothing, not even Disable", Displays.options(.notAvailable, on, activeCount: 2).isEmpty)
+        check("options: Disabled offers Enable Display", Displays.options(.disabled, nil, activeCount: 1)
+              == [O(title: "Enable Display", action: .enable)])
+        check("options: a failed enable adds the reason", Displays.options(.disabled, nil, activeCount: 1, enableFailed: true)
+              == [O(title: "Enable Display", action: .enable), O(title: Displays.enableFailedInfo)])
+        let rows = Displays.rows([on], failures: ["Z": .rejected], disabled: ["Z": DisplayRecord(choice: .on, name: "LG", disabledID: 9)],
+                                 activeCount: 1)
+        check("rows: a disabled display shows Disabled and a failed enable", rows.count == 2 && rows[1].state == .disabled
+              && rows[1].status == "Disabled" && rows[1].options.count == 2 && !rows[1].isMain)
+        check("toggle: Disabled → nothing", Displays.toggleTarget(.disabled) == nil)
+        check("outcome: disable completed and gone or inactive → success",
+              Displays.enabledOutcome(false, completed: true, after: nil)
+                && Displays.enabledOutcome(false, completed: true, after: entry(current: native144, active: false)))
+        check("outcome: disable completed but still active → failure", !Displays.enabledOutcome(false, completed: true, after: on))
+        check("outcome: enable completed and active → success", Displays.enabledOutcome(true, completed: true, after: on))
+        check("outcome: enable completed but gone → failure", !Displays.enabledOutcome(true, completed: true, after: nil))
+        check("outcome: a transaction error → failure", !Displays.enabledOutcome(true, completed: false, after: on))
+        check("open: a lone display starts open, a click shuts it", Displays.isOpen("A", rowCount: 1, toggled: [])
+              && !Displays.isOpen("A", rowCount: 1, toggled: ["A"]))
+        check("open: with several, a click opens one", !Displays.isOpen("A", rowCount: 2, toggled: [])
+              && Displays.isOpen("A", rowCount: 2, toggled: ["A"]) && !Displays.isOpen("B", rowCount: 2, toggled: ["A"]))
+        check("icon: a disabled display alone → normal", Displays.icon(available: true, [.disabled]) == .normal)
     }
 
     // MARK: Icon state (R-14)

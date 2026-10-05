@@ -18,6 +18,11 @@ private let displayOnline: Bool = {
         #expect(DisplaySystem.resolve("/nonexistent/CoreGraphics", DisplaySystem.symbols) == nil)
         let (a, b, _) = DisplaySystem.symbols
         #expect(DisplaySystem.resolve(DisplaySystem.imagePath, (a, b, "NoSuchFunction")) == nil)
+        // The fourth (ADR 2132bdb2) resolves on its own; missing, it only leaves out Disable Display.
+        #expect(DisplaySystem.resolveEnabled(DisplaySystem.imagePath, DisplaySystem.enabledSymbol) != nil)
+        #expect(DisplaySystem.Backend().canDisable())
+        #expect(DisplaySystem.resolveEnabled(DisplaySystem.imagePath, "NoSuchFunction") == nil)
+        #expect(DisplaySystem.resolveEnabled("/nonexistent/CoreGraphics", DisplaySystem.enabledSymbol) == nil)
     }
 
     /// The production snapshot, for real and read-only (NFR-7): every display has a UUID, a current mode and
