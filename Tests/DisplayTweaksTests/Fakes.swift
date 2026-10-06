@@ -130,10 +130,17 @@ final class FakeDisplayWorld {
         return Display(id: id, uuid: "\(name)-UUID", name: name, x: x, current: current)
     }
 
-    /// Sidecar-like: no native density-2 mode (R-2).
+    /// A 3840×2160 panel (`SelfTest.uhdTable`, ADR 6a89a88d): On is 3360×1890 at 2× (mode 148), Off its 1× twin (149).
+    static func uhd(_ id: CGDirectDisplayID, _ name: String, x: Int, on: Bool = false) -> Display {
+        let current = SelfTest.uhdTable.first { $0.number == (on ? 148 : 149) }!
+        return Display(id: id, uuid: "\(name)-UUID", name: name, x: x, current: current, table: SelfTest.uhdTable,
+                       native: SelfTest.uhdNative)
+    }
+
+    /// Not available: no density-2 mode at all (R-2, ADR 6a89a88d).
     static func ipad(_ id: CGDirectDisplayID, x: Int) -> Display {
         Display(id: id, uuid: "IPAD-UUID", name: "iPad", x: x, current: SelfTest.mode(1, 0, 1920, 1080, 1, 60),
-                table: [SelfTest.mode(1, 0, 1920, 1080, 1, 60), SelfTest.mode(2, 0, 960, 540, 2, 60)],
+                table: [SelfTest.mode(1, 0, 1920, 1080, 1, 60), SelfTest.mode(2, 0, 960, 540, 1, 60)],
                 native: Displays.Size(width: 1920, height: 1080))
     }
 

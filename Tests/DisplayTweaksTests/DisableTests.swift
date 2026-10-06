@@ -61,6 +61,23 @@ extension Desktop {
             #expect(d.rows.count == 1)
         }
 
+        /// ADR 55cd537c: a display without any HiDPI mode is still offered Disable Display, under the same guard.
+        @Test func ineligibleDisplay() {
+            h.world.displays = [FakeDisplayWorld.ipad(3, x: 0)]
+            let c = h.controller()
+            #expect(row(c, "IPAD-UUID")?.options.map(\.title) == [Displays.disableTitle, Displays.onlyActiveInfo])
+            c.disable("IPAD-UUID")
+            #expect(h.world.enables.isEmpty) // the last active display
+            world()
+            h.world.plug(FakeDisplayWorld.ipad(3, x: 5120))
+            let d = h.controller()
+            #expect(row(d, "IPAD-UUID")?.state == .notAvailable)
+            d.disable("IPAD-UUID")
+            #expect(h.world.enables == ["3:off"] && row(d, "IPAD-UUID")?.state == .disabled)
+            d.enable("IPAD-UUID")
+            #expect(h.world.enables == ["3:off", "3:on"] && row(d, "IPAD-UUID")?.state == .notAvailable)
+        }
+
         @Test func withoutTheFunction() {
             world()
             h.world.canDisable = false

@@ -3,7 +3,7 @@
 Per-display HiDPI for macOS 26 on Apple Silicon. For each external display, DisplayTweaks turns **HiDPI** on or off from its menu bar item:
 
 - **HiDPI on:** a 2560×1440 panel keeps a UI that looks like 2560×1440, but it is rendered into a 5120×2880 framebuffer and downsampled by the display pipeline, so text is Retina-sharp. The panel keeps its refresh rate and its place in the display arrangement.
-- **How:** WindowServer already generates a native-size HiDPI mode for these panels but hides it from the public mode list. DisplayTweaks reads WindowServer's full mode table and selects that hidden mode. There is no virtual display, no mirroring, no override file and no admin rights.
+- **How:** WindowServer already generates a native-size HiDPI mode for these panels but hides it from the public mode list. DisplayTweaks reads WindowServer's full mode table and selects that hidden mode. Panels too large for a native-size HiDPI mode (such as 4K on Apple Silicon) switch between HiDPI and 1× at their current size instead, and from native 1× turn on at the largest HiDPI size. There is no virtual display, no mirroring, no override file and no admin rights.
 - macOS itself saves the choice, so it survives replugging, login and reboot.
 
 It is a menu bar agent app with no Dock icon, built to cost nothing while idle. It is for personal use only: self-signed, not sandboxed, not notarized. It needs no Accessibility permission.
@@ -62,7 +62,7 @@ The menu bar item shows a display icon (with "DEV" in development builds). Its m
 | On | `HiDPI · 2560 × 1440 · 144 Hz` |
 | Off | `HiDPI Off · 144 Hz` |
 | Failed | `Failed — no HiDPI mode at 120 Hz` or `Failed — macOS rejected the change`. The menu bar icon shows a warning badge. Only turning HiDPI on can fail this way: if macOS rejects turning it off, the display stays On and shows as On. |
-| Not available | `HiDPI not available` — macOS generates no native-size HiDPI mode for this display (for example Sidecar, AirPlay, DisplayLink, or a panel too large for the GPU). The row doesn't open. |
+| Not available | `HiDPI not available` — macOS generates no HiDPI mode at all for this display. The row still opens to Disable Display. |
 | Disabled | `Disabled` — you disabled it from this menu. |
 
 Click a display to open its options in place; the menu stays open, and it remembers which displays you opened until you quit. With a single display, it starts open.
@@ -73,7 +73,7 @@ Click a display to open its options in place; the menu stays open, and it rememb
 
 Below the displays:
 
-- **Turn Off HiDPI on All Displays** switches every connected display that is on back to native. It is dimmed when none is on.
+- **Turn Off HiDPI on All Displays** switches every connected display that is on back to 1× at the same size. It is dimmed when none is on.
 - **Launch at Login**, **Automatic Updates**, **Check for Updates…** and **Quit DisplayTweaks**.
 
 With no external display the menu says "No External Display Connected". If this version of macOS lacks the private functions DisplayTweaks uses, it says "HiDPI Unavailable" with a warning icon, and the rest of the app keeps working.
@@ -82,9 +82,9 @@ HiDPI uses the display's current refresh rate. To get HiDPI at another rate, pic
 
 ## Behaviour notes
 
-- **HiDPI stays on after you quit.** macOS saves the choice itself, so quitting or uninstalling DisplayTweaks changes nothing. To go back to native, use **Turn Off HiDPI on All Displays with every display connected** before quitting or uninstalling. Disconnected displays keep their saved HiDPI.
+- **HiDPI stays on after you quit.** macOS saves the choice itself, so quitting or uninstalling DisplayTweaks changes nothing. To go back to 1×, use **Turn Off HiDPI on All Displays with every display connected** before quitting or uninstalling. Disconnected displays keep their saved HiDPI.
 - **Remembered per display.** DisplayTweaks remembers each display's choice and turns HiDPI back on after a reconnect, wake or launch if macOS didn't restore it. On first sight it adopts whatever the display is already set to, including HiDPI set by another app.
-- **System Settings wins.** Picking another resolution for a display in System Settings counts as turning HiDPI off for it, and DisplayTweaks won't turn it back on. Within 10 s of a reconnect or wake, changes aren't read this way, because macOS may still be restoring the display's mode.
+- **System Settings wins.** Picking a non-HiDPI resolution for a display in System Settings counts as turning HiDPI off for it, and DisplayTweaks won't turn it back on. Another HiDPI (scaled) size keeps it on. Within 10 s of a reconnect or wake, changes aren't read this way, because macOS may still be restoring the display's mode.
 - **Disabling lasts for the login session.** A disabled display stays off when you quit DisplayTweaks, and comes back by itself after a logout or restart. If DisplayTweaks isn't running, power-cycle or replug the display to get it back.
 - **The screen blinks** for about a second on each switch, as with any resolution change. Displays never move in the arrangement.
 - DisplayTweaks reacts to display events only: it costs nothing while idle.
@@ -92,9 +92,9 @@ HiDPI uses the display's current refresh rate. To get HiDPI at another rate, pic
 ## Known limitations
 
 - DisplayTweaks uses four private CoreGraphics functions. A macOS update may change or remove them; DisplayTweaks then shows "HiDPI Unavailable" instead of switching, or leaves out Disable Display.
-- Only displays for which macOS generates the hidden native-size HiDPI mode are supported.
+- Only displays for which macOS generates HiDPI modes are supported. After macOS drops HiDPI, a panel without a native-size HiDPI mode gets it back at its largest HiDPI size, not necessarily the size you had.
 - HiDPI stays on after you quit (see above).
-- A resolution change in System Settings turns HiDPI off for that display.
+- A change to a non-HiDPI resolution in System Settings turns HiDPI off for that display.
 
 ## Releases and updates
 

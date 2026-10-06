@@ -71,7 +71,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         for row in shown { // R-1, R-13: a header per display, opened into its options
             let header = add(row.title, row.options.isEmpty ? nil : #selector(toggleOpen(_:)))
             header.representedObject = row.uuid
-            header.isEnabled = !row.options.isEmpty // Not available: nothing to open (R-2)
+            header.isEnabled = !row.options.isEmpty // nothing to open: Not available and no Disable Display
             let open = Displays.isOpen(row.uuid, rowCount: shown.count, toggled: toggled)
             header.view = DisplayRowView(row: row, isOpen: open) { [weak self, weak header] in header.map { self?.toggleOpen($0) } }
             insertOptions(row, after: header)

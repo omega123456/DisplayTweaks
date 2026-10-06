@@ -136,6 +136,32 @@ extension Desktop {
             #expect(c.icon == .normal)
         }
 
+        /// ADR 6a89a88d: a 4K panel without a native 2× mode toggles density at its current size, like BetterDisplay.
+        @Test func uhdTogglesAtTheCurrentSize() {
+            h.world.displays = [FakeDisplayWorld.uhd(5, "ASUS CG32U", x: 0, on: true)]
+            let c = h.controller()
+            let asus = "ASUS CG32U-UUID"
+            #expect(state(c, asus) == .on && record(asus)?.choice == .on) // adopted On at first sight
+            c.toggle(asus)
+            #expect(h.world.switches == ["5:149"])
+            #expect(state(c, asus) == .off && record(asus)?.choice == .off)
+            #expect(h.log.contains("switch ASUS CG32U ASUS CG3: off target 3360x1890 density 1.0 60 Hz mode 149 result=0"))
+            c.toggle(asus)
+            #expect(h.world.switches == ["5:149", "5:148"])
+            #expect(state(c, asus) == .on)
+        }
+
+        /// ADR 6a89a88d: from native 1× there is no 2× at that size, so On takes the largest 2× size.
+        @Test func uhdTurnsOnFromNativeToTheLargest2x() {
+            var asus = FakeDisplayWorld.uhd(5, "ASUS CG32U", x: 0)
+            asus.current = SelfTest.uhdTable.first { $0.number == 158 }!
+            h.world.displays = [asus]
+            let c = h.controller()
+            c.toggle("ASUS CG32U-UUID")
+            #expect(h.world.switches == ["5:148"])
+            #expect(state(c, "ASUS CG32U-UUID") == .on)
+        }
+
         // MARK: Turn Off All, serial switching (R-8, R-9, DD-7)
 
         @Test func turnOffAllInListOrder() {

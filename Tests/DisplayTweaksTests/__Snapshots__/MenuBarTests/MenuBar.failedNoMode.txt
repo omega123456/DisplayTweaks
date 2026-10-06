@@ -6,7 +6,7 @@
       HiDPI
           Choose HiDPI to retry. (disabled)
       Disable Display
-  iPad — HiDPI not available (disabled)
+  iPad — HiDPI not available ▸
 ---
   Turn Off HiDPI on All Displays
 ---

@@ -1,11 +1,13 @@
   DisplayTweaks Dev <version> (debug) (disabled)
 ---
   Displays
-  iPad — HiDPI not available ▾
+  ASUS CG32U — HiDPI · 3360 × 1890 · 60 Hz ▾
+✓     HiDPI
+          Looks like 3360 × 1890 (6720 × 3780 backing) · 60 Hz (disabled)
       Disable Display (disabled)
           Can’t disable the only active display (disabled)
 ---
-  Turn Off HiDPI on All Displays (disabled)
+  Turn Off HiDPI on All Displays
 ---
   Launch at Login
 ✓ Automatic Updates

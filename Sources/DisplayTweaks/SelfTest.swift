@@ -20,6 +20,7 @@ enum SelfTest {
             ("eligibility", eligibility),
             ("current state", currentState),
             ("mode choice", modeChoice),
+            ("4K panel", uhdPanel),
             ("event decision", eventDecision),
             ("first-sight adoption", adoption),
             ("names and order", namesAndOrder),
@@ -61,6 +62,25 @@ enum SelfTest {
         mode(117, 0x00200001, 2560, 1440, 2, 60),
     ]
     static let dellNative = Displays.Size(width: 2560, height: 1440)
+
+    /// A 3840×2160 panel's table, shaped like the 2026-10-06 ASUS CG32U probe (ADR 6a89a88d): no native 2× mode
+    /// (it would need a 7680 px backing), 2× sizes up to 3360×1890.
+    static let uhdTable: [Mode] = [
+        mode(81, 0x00000001, 1680, 945, 2, 60),   // a 2× size without a 1× sibling
+        mode(87, 0x00000001, 1920, 1080, 1, 60),
+        mode(88, 0x02000007, 1920, 1080, 2, 60),  // macOS's default 2× mode
+        mode(128, 0x00000001, 3008, 1692, 2, 60),
+        mode(132, 0x00000001, 3008, 1692, 2, 30), // the largest 2× size at 30 Hz
+        mode(138, 0x00000001, 3200, 1800, 2, 60),
+        mode(148, 0x00000001, 3360, 1890, 2, 60), // the largest 2× size
+        mode(149, 0x00000001, 3360, 1890, 1, 60),
+        mode(150, 0x00000001, 3360, 1890, 2, 50),
+        mode(151, 0x00000001, 3360, 1890, 1, 50),
+        mode(158, 0x02000001, 3840, 2160, 1, 60), // native, 1× only
+        mode(159, 0x02000001, 3840, 2160, 1, 50),
+        mode(160, 0x02000001, 3840, 2160, 1, 30),
+    ]
+    static let uhdNative = Displays.Size(width: 3840, height: 2160)
 
     /// A snapshot entry whose current mode is `current` (points = its size, pixels = size × density).
     static func entry(_ uuid: String = "A", id: UInt32 = 1, name: String? = "DELL", x: Int = 0, y: Int = 0,
@@ -119,9 +139,12 @@ enum SelfTest {
     private static func eligibility() {
         check("eligible: native density 2 in the table", Displays.isEligible(entry(current: native144)))
         let halfOnly = dellTable.filter { !($0.density == 2 && $0.width == 2560) }
-        check("eligible: only half-size density 2 is not", !Displays.isEligible(entry(current: native144, table: halfOnly)))
+        check("eligible: a density-2 mode of another size is enough", Displays.isEligible(entry(current: native144, table: halfOnly)))
+        check("eligible: no density-2 mode at all is not",
+              !Displays.isEligible(entry(current: native144, table: dellTable.filter { $0.density != 2 })))
         check("eligible: an empty table is not", !Displays.isEligible(entry(current: native144, table: [])))
-        check("eligible: no native mode is not", !Displays.isEligible(entry(current: native144, native: nil)))
+        check("eligible: without a native mode too (2× works at the current size)",
+              Displays.isEligible(entry(current: native144, native: nil)))
     }
 
     // MARK: Current state (R-3)
@@ -129,7 +152,8 @@ enum SelfTest {
     private static func currentState() {
         check("state: 2× pixels → On", Displays.isOn(entry(current: hiDPI144)))
         check("state: 1× → Off", !Displays.isOn(entry(current: native144)))
-        check("state: a non-native size → Off", !Displays.isOn(entry(current: other144)))
+        check("state: a non-native size at 1× → Off", !Displays.isOn(entry(current: other144)))
+        check("state: a non-native size at 2× → On", Displays.isOn(entry(current: mode(11, 0, 1280, 720, 2, 144))))
         check("state: 1× native is native 1×", Displays.isNative1x(entry(current: native144)))
         check("state: another size is not native 1×", !Displays.isNative1x(entry(current: other144)))
         check("state: Failed shows until cleared", Displays.state(entry(current: native144), failure: .rejected) == .failed(.rejected))
@@ -185,6 +209,38 @@ enum SelfTest {
         check("toggle: Off → On", Displays.toggleTarget(.off) == .on)
         check("toggle: Failed → retry On", Displays.toggleTarget(.failed(.noMode(100))) == .on)
         check("toggle: Not available → nothing", Displays.toggleTarget(.notAvailable) == nil)
+    }
+
+    // MARK: 4K panel (ADR 6a89a88d)
+
+    private static func uhdPanel() {
+        func uhd(_ number: Int32) -> Displays.Entry {
+            entry(current: uhdTable.first { $0.number == number }!, table: uhdTable, native: uhdNative)
+        }
+        func on(_ e: Displays.Entry) -> Int32? { try? Displays.onTarget(e, userStarted: true).get().number }
+        func off(_ e: Displays.Entry) -> Int32? { try? Displays.offTarget(e).get().number }
+        func decide(_ e: Displays.Entry, _ remembered: DisplayRecord.Choice, _ flags: Displays.Flags) -> Displays.Decision {
+            Displays.decide(previous: .on, entry: e, remembered: remembered, flags: flags, inGrace: false, inWindow: false)
+        }
+
+        check("4K: 3360 × 1890 at 2× is eligible and On", Displays.state(uhd(148), failure: nil) == .on)
+        check("4K: native 1× is eligible and Off", Displays.state(uhd(158), failure: nil) == .off && Displays.isNative1x(uhd(158)))
+        check("4K: turn-on at 3360 × 1890 1× → the same size at 2× (148)", on(uhd(149)) == 148)
+        check("4K: turn-on at native 1× → the largest 2× size (148, not the default 88)", on(uhd(158)) == 148)
+        check("4K: the largest 2× size at the rate: 30 Hz → 3008 × 1692 (132)", on(uhd(160)) == 132)
+        check("4K: turn-on at 1920 × 1080 1× → the same size at 2× (88)", on(uhd(87)) == 88)
+        check("4K: Turn Off at 3360 × 1890 2× → the same size at 1× (149), at 50 Hz → 151",
+              off(uhd(148)) == 149 && off(uhd(150)) == 151)
+        check("4K: Turn Off from a 2× size without a 1× sibling → native 1× (158)", off(uhd(81)) == 158)
+        check("4K: Turn Off from the default 2× → 1920 × 1080 1× (87)", off(uhd(88)) == 87)
+        check("4K: first sight at 2× → adopted On", Displays.adopt(uhd(148)).choice == .on)
+        check("4K: a stored Off seen at 2× → remember On", decide(uhd(148), .off, .added) == .rememberOn)
+        check("4K: added + remembered On + native 1× → re-apply", decide(uhd(158), .on, .added) == .reapply)
+        check("4K: added + remembered On + a scaled 1× size → remember Off (the user's pick)",
+              decide(uhd(149), .on, .added) == .rememberOff)
+        check("4K: moving between 2× sizes stays On → nothing", decide(uhd(138), .on, .modeChanged) == .nothing)
+        check("4K: status and info", Displays.status(.on, uhd(148)) == "HiDPI · 3360 × 1890 · 60 Hz"
+              && Displays.info(.on, uhd(148)) == "Looks like 3360 × 1890 (6720 × 3780 backing) · 60 Hz")
     }
 
     // MARK: Event decision (R-6, R-7, R-10, DD-4, DD-6)
@@ -323,7 +379,12 @@ enum SelfTest {
         check("options: no Disable Display without the function", Displays.options(.on, on, activeCount: nil) == [hiDPI, info])
         check("options: Off and Failed offer HiDPI unchecked", Displays.options(.off, on, activeCount: nil).first?.isOn == false
               && Displays.options(.failed(.rejected), on, activeCount: nil).first?.action == .hiDPI)
-        check("options: Not available offers nothing, not even Disable", Displays.options(.notAvailable, on, activeCount: 2).isEmpty)
+        check("options: Not available offers only Disable Display",
+              Displays.options(.notAvailable, on, activeCount: 2) == [O(title: "Disable Display", action: .disable)])
+        check("options: Not available on the last active display → dimmed Disable Display and the reason",
+              Displays.options(.notAvailable, on, activeCount: 1)
+                == [O(title: "Disable Display", action: .disable, isEnabled: false), O(title: Displays.onlyActiveInfo)])
+        check("options: Not available without the function → nothing", Displays.options(.notAvailable, on, activeCount: nil).isEmpty)
         check("options: Disabled offers Enable Display", Displays.options(.disabled, nil, activeCount: 1)
               == [O(title: "Enable Display", action: .enable)])
         check("options: a failed enable adds the reason", Displays.options(.disabled, nil, activeCount: 1, enableFailed: true)

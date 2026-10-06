@@ -33,10 +33,11 @@ extension Desktop {
             case noDisable        // DSM On, the enable/disable function missing
             case failedNoMode     // DSM On, DC Failed (no HiDPI mode at 100 Hz) and opened, iPad Not available
             case failedRejected   // DSM Off, DC Failed (macOS rejected the change)
-            case notAvailable     // DC Off and opened, iPad Not available
+            case notAvailable     // DC Off and opened, iPad Not available (only Disable Display)
             case onlyIneligible   // iPad alone
             case oneDisabled      // DSM On, DC disabled, both opened
             case enableFailed     // DSM On, DC disabled and its enable failed, opened
+            case uhd              // a 4K panel On at 3360 × 1890 (no native 2× mode), open by itself
         }
 
         /// The menu and its status icon description for a case.
@@ -63,6 +64,7 @@ extension Desktop {
                 h.world.error = .illegalArgument
             case .notAvailable: h.world.displays = [dc(), ipad]
             case .onlyIneligible: h.world.displays = [ipad]
+            case .uhd: h.world.displays = [FakeDisplayWorld.uhd(5, "ASUS CG32U", x: 0, on: true)]
             }
             let bar = MenuBar(controller: h.controller())
             if c == .failedNoMode || c == .failedRejected { bar.controller.toggle(dcID) }
@@ -127,7 +129,7 @@ extension Desktop {
         }
 
         /// Headers open and shut in place, removing exactly their own options; the click path and VoiceOver's press
-        /// go through the header view; an iPad header doesn't open.
+        /// go through the header view; an iPad header (no HiDPI) opens to Disable Display.
         @Test func openAndShut() {
             h.world.displays = [dsm(on: true), dc(), ipad]
             h.world.main = 1
@@ -148,7 +150,9 @@ extension Desktop {
             choose("DELL S2725DC", in: bar.menu)
             choose("DELL S2725DSM (Main)", in: bar.menu)
             #expect(outline(bar.menu) == shut)
-            #expect(!header("iPad").accessibilityPerformPress() && !header("iPad").isOpenable)
+            #expect(header("iPad").isOpenable && header("iPad").accessibilityPerformPress())
+            #expect(bar.menu.items.contains { $0.title == Displays.disableTitle && $0.representedObject as? String == "IPAD-UUID" })
+            choose("iPad", in: bar.menu)
             #expect(header("iPad").accessibilityLabel() == "iPad, HiDPI not available")
             // Drawing (open, shut, Main badge, Disabled) runs offscreen without a menu.
             for view in [header("DELL S2725DSM (Main)"), header("DELL S2725DC"), header("iPad")] {
@@ -156,6 +160,17 @@ extension Desktop {
                 let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
                 view.cacheDisplay(in: view.bounds, to: rep)
             }
+        }
+
+        /// With neither HiDPI nor Disable Display to offer, a header doesn't open.
+        @Test func headerWithNothingToOffer() {
+            h.world.canDisable = false
+            h.world.displays = [dsm(on: true), ipad]
+            let bar = MenuBar(controller: h.controller())
+            bar.menuNeedsUpdate(bar.menu)
+            let item = bar.menu.items.first { $0.title == "iPad" }!
+            let view = item.view as! DisplayRowView
+            #expect(!item.isEnabled && !view.isOpenable && !view.accessibilityPerformPress())
         }
 
         @Test func disableAndEnable() {

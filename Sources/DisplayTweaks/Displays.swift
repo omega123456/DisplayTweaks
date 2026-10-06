@@ -119,7 +119,7 @@ enum Displays {
         var isMain: Bool
         var status: String
         var state: State
-        /// Empty: the header doesn't open (an ineligible display such as an iPad).
+        /// Empty: the header doesn't open (an ineligible display while the enable/disable function is missing).
         var options: [Option]
         /// The header item's title, for VoiceOver, type-select and the outline (owner request: " (Main)").
         var title: String { isMain ? "\(name) (Main)" : name }
@@ -145,22 +145,19 @@ enum Displays {
         (1...16384).contains(m.width) && (1...16384).contains(m.height) && (0.5...4).contains(m.density) && m.refresh <= 1000
     }
 
-    /// Native-size table entries of one density, in table order.
-    private static func nativeModes(_ e: Entry, density: Float) -> [Mode] {
-        guard let n = e.native else { return [] }
-        return e.modes.filter { $0.width == n.width && $0.height == n.height && $0.density == density }
+    /// Table entries of one size and density, in table order; none for a nil size.
+    private static func modes(_ e: Entry, size: Size?, density: Float) -> [Mode] {
+        guard let s = size else { return [] }
+        return e.modes.filter { $0.width == s.width && $0.height == s.height && $0.density == density }
     }
 
-    // MARK: Eligibility and state (R-2, R-3)
+    // MARK: Eligibility and state (R-2, R-3, ADR 6a89a88d)
 
-    /// R-2: the table holds a native-size density-2 mode.
-    static func isEligible(_ e: Entry) -> Bool { !nativeModes(e, density: 2).isEmpty }
+    /// R-2 as amended by ADR 6a89a88d: the table holds a density-2 mode of any size.
+    static func isEligible(_ e: Entry) -> Bool { e.modes.contains { $0.density == 2 } }
 
-    /// R-3: native size in points at twice that in pixels, whoever set it.
-    static func isOn(_ e: Entry) -> Bool {
-        guard let n = e.native else { return false }
-        return e.points == n && e.pixels == Size(width: n.width * 2, height: n.height * 2)
-    }
+    /// R-3 as amended by ADR 6a89a88d: the current mode's pixels are twice its points, at any size, whoever set it.
+    static func isOn(_ e: Entry) -> Bool { e.pixels == Size(width: e.points.width * 2, height: e.points.height * 2) }
 
     /// R-6: native size at 1×, the pattern of macOS having dropped HiDPI.
     static func isNative1x(_ e: Entry) -> Bool { e.native != nil && e.points == e.native && e.pixels == e.native }
@@ -180,17 +177,33 @@ enum Displays {
         return r == 0 && userStarted ? 60 : r
     }
 
-    /// R-4: native size, density 2, that rate; duplicates are identical, so the first in table order wins.
-    static func hiDPIMode(_ e: Entry, refresh: Int) -> Mode? { nativeModes(e, density: 2).first { $0.refresh == refresh } }
+    /// R-4, ADR 6a89a88d: the current point size at density 2 and that rate; otherwise the largest density-2 size at
+    /// that rate (a 4K panel at native 1× has no 2× mode at its size). Duplicates are identical, so the first in
+    /// table order wins, also among equal areas.
+    /// ponytail: the record keeps no size (DD-2), so a re-apply lands on the largest 2× size, not the user's earlier
+    /// scaled size; store the point size in `DisplayRecord` if that matters.
+    static func hiDPIMode(_ e: Entry, refresh: Int) -> Mode? {
+        if let same = modes(e, size: e.points, density: 2).first(where: { $0.refresh == refresh }) { return same }
+        return e.modes.filter { $0.density == 2 && $0.refresh == refresh }   // max(by:) keeps the first of equals
+            .max { $0.width * $0.height < $1.width * $1.height }
+    }
+
+    /// R-5, ADR 6a89a88d: the current point size at density 1 and that rate, preferring the default-mode bit;
+    /// otherwise the native rule (`nativeMode`).
+    static func offMode(_ e: Entry, refresh: Int) -> Mode? {
+        let same = modes(e, size: e.points, density: 1).filter { $0.refresh == refresh }
+        return same.first(where: isDefault) ?? same.first ?? nativeMode(e, refresh: refresh)
+    }
 
     /// R-5: native size, density 1, that rate, preferring the default-mode bit; otherwise the default-bit native
     /// entry at any rate (also when the rate reads 0).
     static func nativeMode(_ e: Entry, refresh: Int) -> Mode? {
-        let native = nativeModes(e, density: 1)
+        let native = modes(e, size: e.native, density: 1)
         let atRate = native.filter { $0.refresh == refresh }
-        let isDefault = { (m: Mode) in m.flags & defaultModeFlag != 0 }
         return atRate.first(where: isDefault) ?? atRate.first ?? native.first(where: isDefault)
     }
+
+    private static func isDefault(_ m: Mode) -> Bool { m.flags & defaultModeFlag != 0 }
 
     /// R-4: the turn-on mode at the rate (0 → 60 when user-started); none at that rate is `.noMode(rate)` (R-10).
     static func onTarget(_ e: Entry, userStarted: Bool) -> Result<Mode, Failure> {
@@ -201,7 +214,7 @@ enum Displays {
     /// R-5: the Turn Off mode at the raw rounded rate (no 0 → 60: that is for turning on, R-4). No density-1 native
     /// mode at all is a rejection, handled like any failed Off (`showsFailure`).
     static func offTarget(_ e: Entry) -> Result<Mode, Failure> {
-        nativeMode(e, refresh: refresh(e, userStarted: false)).map { .success($0) } ?? .failure(.rejected)
+        offMode(e, refresh: refresh(e, userStarted: false)).map { .success($0) } ?? .failure(.rejected)
     }
 
     /// The menu toggle (R-4, R-5, R-10): On turns off, Off and Failed turn on (a retry), Not available and
@@ -331,20 +344,23 @@ enum Displays {
 
     /// A display's options: HiDPI and its info line, then Disable Display (left out when the function is missing,
     /// `activeCount` nil), dimmed with the reason on the last active display. A disabled display only offers Enable
-    /// Display; an ineligible one nothing (it can't be disabled either: Sidecar and AirPlay manage themselves).
+    /// Display; an ineligible one only Disable Display (ADR 55cd537c).
     static func options(_ state: State, _ e: Entry?, activeCount: Int?, enableFailed: Bool = false) -> [Option] {
         switch state {
-        case .notAvailable: return []
+        case .notAvailable: return disableOptions(activeCount)
         case .disabled:
             return [Option(title: enableTitle, action: .enable)] + (enableFailed ? [Option(title: enableFailedInfo)] : [])
         case .on, .off, .failed:
-            var out = [Option(title: hiDPITitle, action: .hiDPI, isOn: state == .on)]
-            if let e { out.append(Option(title: info(state, e))) }
-            guard let activeCount else { return out }
-            let allowed = canDisable(activeCount: activeCount)
-            out.append(Option(title: disableTitle, action: .disable, isEnabled: allowed))
-            return allowed ? out : out + [Option(title: onlyActiveInfo)]
+            let hiDPI = [Option(title: hiDPITitle, action: .hiDPI, isOn: state == .on)]
+            return hiDPI + (e.map { [Option(title: info(state, $0))] } ?? []) + disableOptions(activeCount)
         }
+    }
+
+    /// Disable Display, or nothing without the function (`activeCount` nil); dimmed with the reason on the last active display.
+    private static func disableOptions(_ activeCount: Int?) -> [Option] {
+        guard let activeCount else { return [] }
+        let allowed = canDisable(activeCount: activeCount)
+        return [Option(title: disableTitle, action: .disable, isEnabled: allowed)] + (allowed ? [] : [Option(title: onlyActiveInfo)])
     }
 
     /// The listed displays, then the disabled ones (which macOS no longer lists) by name.
