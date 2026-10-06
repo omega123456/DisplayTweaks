@@ -18,13 +18,18 @@ final class MenuBar: NSObject, NSMenuDelegate {
     /// The rows the open menu shows, and the headers clicked open or shut since launch (`Displays.isOpen`).
     private var shown: [Displays.Row] = []
     private var toggled: Set<String> = []
+    /// While the menu is open, a change rebuilds it in place, so an option's new state shows without reopening.
+    private var isOpen = false
     /// Marks option items, so closing a header removes exactly its own.
     private static let optionTag = 1
 
     init(controller: HiDPIController) {
         self.controller = controller
         super.init()
-        controller.onChange = { [weak self] in self?.updateImage() }
+        controller.onChange = { [weak self] in
+            guard let self else { return }
+            isOpen ? menuNeedsUpdate(menu) : updateImage()
+        }
         item.isVisible = Self.showsStatusItem
         menu.delegate = self
         menu.autoenablesItems = false
@@ -45,6 +50,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
         image?.isTemplate = true
         item.button?.image = image
     }
+
+    func menuWillOpen(_ menu: NSMenu) { isOpen = true }
+    func menuDidClose(_ menu: NSMenu) { isOpen = false }
 
     /// Wireframe order: debug block (Dev only), the display rows or the empty / unavailable rows, Turn Off All,
     /// the app block, Quit; separators between the groups.
@@ -101,6 +109,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
     private func insertOptions(_ row: Displays.Row, after header: NSMenuItem) {
         var index = menu.index(of: header)
+        let settling = controller.settling.contains(row.uuid) // busy until its disable or enable has settled
         for option in row.options {
             let action: Selector? = switch option.action {
             case .hiDPI: #selector(toggle(_:))
@@ -111,10 +120,12 @@ final class MenuBar: NSObject, NSMenuDelegate {
             let item = NSMenuItem(title: option.title, action: action, keyEquivalent: "")
             item.target = action == nil ? nil : self
             item.state = option.isOn ? .on : .off
-            item.isEnabled = option.isEnabled && action != nil
+            item.isEnabled = option.isEnabled && action != nil && !settling
             item.indentationLevel = action == nil ? 2 : 1
             item.representedObject = row.uuid
             item.tag = Self.optionTag
+            let busy = settling && (option.action == .disable || option.action == .enable)
+            item.view = OptionRowView(item: item, busy: busy) // a click keeps the menu open
             index += 1
             menu.insertItem(item, at: index)
         }
@@ -157,7 +168,7 @@ final class DisplayRowView: NSView {
     private static let nameFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
     private static let statusFont = NSFont.systemFont(ofSize: 11)
     private static let badgeFont = NSFont.systemFont(ofSize: 10, weight: .semibold)
-    private static let textX: CGFloat = 44
+    static let textX: CGFloat = 44
 
     init(row: Displays.Row, isOpen: Bool, onClick: @escaping () -> Void) {
         self.row = row
@@ -242,5 +253,88 @@ final class DisplayRowView: NSView {
             chevron.draw(in: NSRect(x: bounds.width - 22 - size.width / 2, y: (bounds.height - size.height) / 2,
                                     width: size.width, height: size.height))
         }
+    }
+}
+
+/// A display option: HiDPI, Disable Display, Enable Display, or an info line (no action). Plain items close the
+/// menu when chosen; this view sends the item's action itself, so the menu stays open and is rebuilt in place by `onChange`.
+/// While the action runs (a switch blocks the main thread) the row shows a spinner and takes no clicks, including
+/// the ones queued meanwhile.
+/// Title, state and enabled stay set on the item for VoiceOver, type-select and the outline.
+final class OptionRowView: NSView {
+    private static let font = NSFont.menuFont(ofSize: 13)
+    private static let infoFont = NSFont.systemFont(ofSize: 11)
+    /// Uptime when the last action finished; clicks from before it were queued while it ran.
+    private static var readyAt: TimeInterval = 0
+    private var spinner: NSProgressIndicator?
+    var isBusy: Bool { spinner != nil }
+
+    init(item: NSMenuItem, busy: Bool = false) {
+        let width = (item.title as NSString).size(withAttributes: [.font: Self.font]).width
+        super.init(frame: NSRect(x: 0, y: 0, width: DisplayRowView.textX + width + 20,
+                                   height: item.action == nil ? 18 : 22))
+        autoresizingMask = .width
+        setAccessibilityElement(true)
+        setAccessibilityRole(item.action == nil ? .staticText : .checkBox)
+        setAccessibilityLabel(item.title)
+        if item.action != nil { setAccessibilityValue(item.state == .on) }
+        setAccessibilityEnabled(item.isEnabled)
+        if busy { spin() }
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    private var isHighlighted: Bool { !isBusy && enclosingMenuItem.map { $0.isEnabled && $0.isHighlighted } == true }
+
+    /// Shows the spinner at once, then runs the action on the next turn: it rebuilds the menu (fresh rows show the
+    /// new state), which would otherwise remove this view mid-click. A row left in place (menu closed) clears itself.
+    @discardableResult
+    func press() -> Bool {
+        guard !isBusy, let item = enclosingMenuItem, item.isEnabled, let action = item.action else { return false }
+        spin()
+        display() // drawn before the switch blocks the main thread
+        CATransaction.flush()
+        DispatchQueue.main.async {
+            NSApp.sendAction(action, to: item.target, from: item)
+            Self.readyAt = ProcessInfo.processInfo.systemUptime
+            self.spinner?.removeFromSuperview()
+            self.spinner = nil
+            self.setAccessibilityEnabled(item.isEnabled)
+            self.needsDisplay = true
+        }
+        return true
+    }
+
+    private func spin() {
+        let spinner = NSProgressIndicator(frame: NSRect(x: DisplayRowView.textX - 20, y: (bounds.height - 16) / 2,
+                                                        width: 16, height: 16))
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.usesThreadedAnimation = true
+        addSubview(spinner)
+        spinner.startAnimation(nil)
+        self.spinner = spinner
+        setAccessibilityEnabled(false)
+    }
+
+    override func mouseUp(with event: NSEvent) { if event.timestamp >= Self.readyAt { press() } }
+    override func accessibilityPerformPress() -> Bool { press() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let item = enclosingMenuItem else { return }
+        let lit = isHighlighted
+        if lit {
+            NSColor.selectedContentBackgroundColor.setFill()
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 5, dy: 0), xRadius: 5, yRadius: 5).fill()
+        }
+        let ink: NSColor = lit ? .selectedMenuItemTextColor
+            : item.isEnabled && !isBusy ? .labelColor : item.action == nil ? .secondaryLabelColor : .tertiaryLabelColor
+        let font = item.action == nil ? Self.infoFont : Self.font
+        let title = NSAttributedString(string: item.title, attributes: [.font: font, .foregroundColor: ink])
+        let y = (bounds.height - title.size().height) / 2
+        title.draw(at: NSPoint(x: DisplayRowView.textX, y: y))
+        guard item.state == .on, !isBusy else { return }
+        NSAttributedString(string: "\u{2713}", attributes: [.font: Self.font, .foregroundColor: ink])
+            .draw(at: NSPoint(x: DisplayRowView.textX - 16, y: y))
     }
 }

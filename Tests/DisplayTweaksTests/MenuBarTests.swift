@@ -41,7 +41,7 @@ extension Desktop {
         }
 
         /// The menu and its status icon description for a case.
-        func menu(for c: Case) -> MenuBar {
+        func menu(for c: Case) async -> MenuBar {
             h.available = c != .unavailable
             h.world.main = 1 // the DSM, when present
             switch c {
@@ -68,7 +68,10 @@ extension Desktop {
             }
             let bar = MenuBar(controller: h.controller())
             if c == .failedNoMode || c == .failedRejected { bar.controller.toggle(dcID) }
-            if c == .oneDisabled || c == .enableFailed { bar.controller.disable(dcID) }
+            if c == .oneDisabled || c == .enableFailed {
+                bar.controller.disable(dcID)
+                await h.batch() // settled
+            }
             if c == .enableFailed {
                 h.world.error = .illegalArgument
                 bar.controller.enable(dcID)
@@ -84,13 +87,13 @@ extension Desktop {
         }
 
         @Test(arguments: Case.allCases)
-        func menu(_ c: Case) {
-            let bar = menu(for: c)
+        func menu(_ c: Case) async {
+            let bar = await menu(for: c)
             assertSnapshot(of: outline(bar.menu), as: .lines, named: c.rawValue, testName: "MenuBar")
         }
 
         /// R-14: symbol and description per state; precedence unavailable > Failed > normal.
-        @Test func statusIcons() {
+        @Test func statusIcons() async {
             let expected: [Case: (String, String)] = [
                 .empty: ("display", "DisplayTweaks"),
                 .twoDisplays: ("display", "DisplayTweaks, HiDPI on"),
@@ -99,7 +102,7 @@ extension Desktop {
                 .unavailable: ("exclamationmark.triangle", "DisplayTweaks, unavailable"),
             ]
             for (c, (symbol, description)) in expected {
-                let bar = menu(for: c)
+                let bar = await menu(for: c)
                 #expect(bar.item.button?.image?.accessibilityDescription == description, "\(c)")
                 #expect(Displays.icon(available: h.available, bar.controller.rows.map(\.state)).symbol == symbol, "\(c)")
                 h.world.displays = []
@@ -160,6 +163,64 @@ extension Desktop {
                 let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
                 view.cacheDisplay(in: view.bounds, to: rep)
             }
+        }
+
+        /// Clicking an option keeps the menu open: its view shows a spinner and takes no clicks, sends the action
+        /// on the next turn, and the open menu is rebuilt in place with the new state. Clicks queued while the
+        /// action ran are dropped.
+        @Test func optionKeepsMenuOpen() async {
+            h.world.displays = [dsm(on: true)]
+            let bar = MenuBar(controller: h.controller())
+            bar.menuWillOpen(bar.menu)
+            bar.menuNeedsUpdate(bar.menu)
+            let option = { (title: String) in bar.menu.items.first { $0.title == title }!.view as! OptionRowView }
+            #expect(!option(Displays.disableTitle).press()) // the last active display
+            let click = { (at: TimeInterval) in NSEvent.mouseEvent(
+                with: .leftMouseUp, location: .zero, modifierFlags: [], timestamp: at, windowNumber: 0, context: nil,
+                eventNumber: 0, clickCount: 1, pressure: 0)! }
+            let clicked = ProcessInfo.processInfo.systemUptime
+            let busy = option("HiDPI")
+            busy.mouseUp(with: click(clicked))
+            #expect(h.world.switches.isEmpty) // not yet: the click returns first
+            #expect(busy.isBusy && busy.subviews.contains { $0 is NSProgressIndicator } && !busy.press())
+            await settle()
+            #expect(h.world.switches == ["1:78"])
+            #expect(bar.menu.items.first { $0.title == "HiDPI" }?.state == .off) // rebuilt while open
+            #expect(!option("HiDPI").isBusy)
+            option("HiDPI").mouseUp(with: click(clicked)) // queued during the switch: dropped
+            await settle()
+            #expect(h.world.switches == ["1:78"])
+            bar.menuDidClose(bar.menu) // a closed menu isn't rebuilt: the row clears itself
+            let kept = option("HiDPI")
+            #expect(kept.accessibilityPerformPress())
+            await settle()
+            #expect(h.world.switches.count == 2 && !kept.isBusy && kept.subviews.isEmpty)
+            for item in bar.menu.items where item.view is OptionRowView {
+                let view = item.view!
+                let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+                view.cacheDisplay(in: view.bounds, to: rep)
+            }
+        }
+
+        /// After Disable or Enable Display the display stays busy (spinner, nothing clickable) until its callbacks'
+        /// batch has run, which also re-applies HiDPI after an enable.
+        @Test func disableAndEnableSettle() async {
+            h.world.displays = [dsm(on: true), dc(on: true)]
+            let bar = MenuBar(controller: h.controller())
+            bar.menuWillOpen(bar.menu)
+            bar.menuNeedsUpdate(bar.menu)
+            choose("DELL S2725DC", in: bar.menu)
+            let option = { (title: String) in
+                bar.menu.items.first { $0.title == title && $0.representedObject as? String == dcID }!
+            }
+            choose(Displays.disableTitle, of: dcID, in: bar.menu)
+            #expect((option(Displays.enableTitle).view as! OptionRowView).isBusy && !option(Displays.enableTitle).isEnabled)
+            await h.batch()
+            #expect(!(option(Displays.enableTitle).view as! OptionRowView).isBusy && option(Displays.enableTitle).isEnabled)
+            choose(Displays.enableTitle, of: dcID, in: bar.menu)
+            #expect((option(Displays.disableTitle).view as! OptionRowView).isBusy && !option("HiDPI").isEnabled)
+            await h.batch()
+            #expect(!(option(Displays.disableTitle).view as! OptionRowView).isBusy && option("HiDPI").state == .on)
         }
 
         /// With neither HiDPI nor Disable Display to offer, a header doesn't open.

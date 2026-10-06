@@ -16,6 +16,9 @@ final class HiDPIController {
     private var activeCount = 0
     /// Failed turn-ons (R-10), and failed enables of a disabled display.
     private var failures: [String: Displays.Failure] = [:]
+    /// Displays disabled or enabled whose callbacks haven't been handled yet (the next batch, which also
+    /// re-applies HiDPI after an enable). The menu shows them busy.
+    private(set) var settling: Set<String> = []
     /// DD-6, per UUID: when DisplayTweaks' last transaction completed, and when the display was last added or woken.
     private var switchedAt: [String: Double] = [:]
     private var addedAt: [String: Double] = [:]
@@ -117,6 +120,7 @@ final class HiDPIController {
         // R-4: an unsettled 0 Hz reading is re-checked after one more debounce, without restarting the grace (DD-6).
         for id in recheck { pending[id] = .recheck }
         if !recheck.isEmpty { restartDebounce() }
+        settling = []
         onChange()
     }
 
@@ -194,6 +198,7 @@ final class HiDPIController {
             store.save(record, for: uuid)
             failures[uuid] = nil
             EventLog.write("record \(label(e)): disabled")
+            settling.insert(uuid)
         } else {
             EventLog.write("failure \(label(e)): couldn\u{2019}t disable")
         }
@@ -215,6 +220,7 @@ final class HiDPIController {
             failures[uuid] = nil
             store.save(record, for: uuid)
             EventLog.write("record \(name): enabled")
+            settling.insert(uuid)
         } else {
             failures[uuid] = .rejected
             EventLog.write("failure \(name): couldn\u{2019}t enable")
